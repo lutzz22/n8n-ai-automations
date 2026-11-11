@@ -1,4 +1,4 @@
-# Local stack: n8n + a Postgres database with the fictional VoltaSur Energía demo data.
+# Local n8n to run the workflows in this repo.
 # Start:  docker compose up -d   → open http://localhost:5678
 services:
   n8n:
@@ -12,22 +12,6 @@ services:
       - N8N_SECURE_COOKIE=false
     volumes:
       - n8n_data:/home/node/.n8n
-    depends_on:
-      - voltasur-db
-
-  voltasur-db:
-    image: postgres:17
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DEMO_DB_NAME:-voltasur}
-      POSTGRES_USER: ${DEMO_DB_USER:-voltasur}
-      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD:-change-me}
-    ports:
-      - "5433:5432"
-    volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - voltasur_data:/var/lib/postgresql/data
 
 volumes:
   n8n_data:
-  voltasur_data:
