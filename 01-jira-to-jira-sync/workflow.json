@@ -1,0 +1,564 @@
+{
+  "name": "Jira client → Jira internal sync with AI",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "3a554e94-e5d8-4b72-9106-34250f2622f1",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "12fdedb3-8660-41eb-abdb-826667ea3dd5",
+              "name": "client_project_key",
+              "value": "SOPORTE",
+              "type": "string"
+            },
+            {
+              "id": "590aaffb-8990-4cb2-9a05-2a60a63b5058",
+              "name": "client_name",
+              "value": "Distribuidora Demo",
+              "type": "string"
+            },
+            {
+              "id": "73c940c4-4555-4ecb-a1a4-aec1bb723071",
+              "name": "lookback",
+              "value": "-15m",
+              "type": "string"
+            },
+            {
+              "id": "d8e17972-8eda-40c8-a10f-50c1aa58dc8a",
+              "name": "internal_project_id",
+              "value": "10001",
+              "type": "string"
+            },
+            {
+              "id": "5e3f79ae-b005-46ec-a4d6-261ebf20208a",
+              "name": "internal_project_key",
+              "value": "SD",
+              "type": "string"
+            },
+            {
+              "id": "d0ba0064-42a5-465b-8718-cbeeea2cef58",
+              "name": "issue_type_ids",
+              "value": "={{ { incident: '10010', service_request: '10011', question: '10012', change: '10013' } }}",
+              "type": "object"
+            },
+            {
+              "id": "47f81f1a-69f0-49d1-98e3-3fc1a11a98bf",
+              "name": "priority_ids",
+              "value": "={{ { Highest: '1', High: '2', Medium: '3', Low: '4' } }}",
+              "type": "object"
+            },
+            {
+              "id": "f5e9dce0-bde3-4d57-801b-1defe6cbff08",
+              "name": "slack_channel",
+              "value": "#soporte-cliente",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9fade437-2ea0-480b-9886-77a53ea26e8d",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloud",
+        "resource": "issue",
+        "operation": "getAll",
+        "limit": 50,
+        "options": {
+          "jql": "=project = {{ $json.client_project_key }} AND created >= {{ $json.lookback }} ORDER BY created ASC"
+        }
+      },
+      "id": "2947a612-d4aa-4c26-8c0e-f85dfbe8e6f6",
+      "name": "Search client Jira",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira cliente"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// One single query to the internal Jira for all candidates (instead of one per ticket)\nconst keys = $input.all().map(i => i.json.key).filter(Boolean);\nif (!keys.length) return [];\nconst labels = keys.map(k => `\"ext-${k}\"`).join(', ');\nreturn [{ json: {\n  keys,\n  jql: `project = ${$('Config').first().json.internal_project_key} AND labels in (${labels})`,\n} }];"
+      },
+      "id": "eb5d1c7c-90b5-4a76-8a5b-79431d77f78c",
+      "name": "Collect client keys",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloud",
+        "resource": "issue",
+        "operation": "getAll",
+        "limit": 100,
+        "options": {
+          "jql": "={{ $json.jql }}",
+          "fields": "labels"
+        }
+      },
+      "id": "5a62bb72-1419-460f-aa97-47c43e7311e7",
+      "name": "Find already synced",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira interno"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep only client tickets that do not have an internal copy yet (idempotent sync)\nconst synced = new Set(\n  $input.all().flatMap(i => i.json.fields?.labels ?? [])\n);\nreturn $('Search client Jira').all()\n  .filter(i => !synced.has(`ext-${i.json.key}`))\n  .map(i => {\n    const f = i.json.fields;\n    return { json: {\n      key: i.json.key,\n      url: `${i.json.self.split('/rest/')[0]}/browse/${i.json.key}`,\n      summary: f.summary,\n      description: f.description ?? '',\n      reporter: f.reporter?.displayName ?? 'unknown',\n      client_priority: f.priority?.name ?? 'unknown',\n      created: f.created,\n    } };\n  });"
+      },
+      "id": "1838f3e6-400e-4858-87fc-c26400f0914b",
+      "name": "Keep new tickets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Client ticket {{ $json.key }} (client priority: {{ $json.client_priority }})\nReporter: {{ $json.reporter }}\nCreated: {{ $json.created }}\n\nSummary: {{ $json.summary }}\n\nDescription:\n{{ $json.description }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You analyze incidents that a utility client reports in its own Jira, so the internal support team receives a clean, actionable ticket.\n- issue_type: incident (something that worked and now fails), service_request (they ask us to do something), question (how-to or information), change (new behavior or configuration).\n- priority: Highest = a core flow (payments, login, outage reporting, bills) is down for many users or there is a data exposure risk; High = core flow fails for some users or a regulatory/billing deadline is at risk; Medium = workaround exists or non-core feature; Low = questions and cosmetic issues.\n- The client's own priority is a hint, not the answer: apply the rubric.\n- Use only facts from the ticket. Never invent numbers, dates or causes."
+            }
+          ]
+        }
+      },
+      "id": "fe54ab93-da86-441b-9ab5-ae18a8044855",
+      "name": "AI analysis",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        1320,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "deac9ff2-6f60-47d8-a276-7ece69ddc40a",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1260,
+        540
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"title\": {\n      \"type\": \"string\",\n      \"description\": \"Clear title in Spanish, max 80 characters, without the client key\"\n    },\n    \"issue_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"incident\",\n        \"service_request\",\n        \"question\",\n        \"change\"\n      ]\n    },\n    \"priority\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Highest\",\n        \"High\",\n        \"Medium\",\n        \"Low\"\n      ]\n    },\n    \"component\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Pagos\",\n        \"Facturaci\\u00f3n\",\n        \"Oficina Virtual\",\n        \"App\",\n        \"Chatbot\",\n        \"Integraciones\",\n        \"Backoffice\",\n        \"Otro\"\n      ]\n    },\n    \"environment\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"production\",\n        \"qa\",\n        \"unknown\"\n      ]\n    },\n    \"context\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"3 to 5 bullets with the facts an engineer needs: what fails, since when, how many users, error messages\"\n    },\n    \"missing_info\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Data to request from the client. Empty if none.\"\n    }\n  },\n  \"required\": [\n    \"title\",\n    \"issue_type\",\n    \"priority\",\n    \"component\",\n    \"environment\",\n    \"context\",\n    \"missing_info\"\n  ]\n}"
+      },
+      "id": "8a93d8b8-8cc2-4181-9729-dee346f5216d",
+      "name": "Ticket schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1440,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"output\": {\n    \"title\": {{ JSON.stringify($('Keep new tickets').item.json.summary.slice(0, 80)) }},\n    \"issue_type\": \"incident\",\n    \"priority\": \"High\",\n    \"component\": \"Otro\",\n    \"environment\": \"unknown\",\n    \"context\": [\"Automatic analysis failed: read the original ticket\"],\n    \"missing_info\": []\n  }\n}",
+        "options": {}
+      },
+      "id": "b11fda7c-675a-4a86-b056-962d2fc0d20a",
+      "name": "Fallback analysis",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1640,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build the internal ticket: title with the client key, Jira wiki markup body, labels for traceability\nconst a = $input.item.json.output;\nconst t = $('Keep new tickets').item.json;\nconst cfg = $('Config').first().json;\n\nconst description = [\n  `h3. Ticket del cliente: [${t.key}|${t.url}]`,\n  `*Cliente:* ${cfg.client_name} · *Reportado por:* ${t.reporter} · *Prioridad del cliente:* ${t.client_priority}`,\n  '',\n  'h3. Contexto',\n  ...a.context.map(c => `* ${c}`),\n  '',\n  'h3. Información a pedir al cliente',\n  ...(a.missing_info.length ? a.missing_info.map(m => `* ${m}`) : ['_Nada pendiente_']),\n  '',\n  'h3. Descripción original',\n  '{quote}', t.description || t.summary, '{quote}',\n  '',\n  '_Creado automáticamente por n8n + IA._',\n].join('\\n');\n\nconst slug = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');\n\nreturn { json: {\n  client_key: t.key,\n  client_url: t.url,\n  summary: `${t.key} | ${a.title}`,\n  description,\n  issue_type_id: cfg.issue_type_ids[a.issue_type],\n  priority_id: cfg.priority_ids[a.priority],\n  labels: [`ext-${t.key}`, 'cliente-externo', slug(a.component)],\n  ...a,\n} };"
+      },
+      "id": "f7a17e6d-6dee-4126-8bd9-a47b1510094f",
+      "name": "Build internal ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloud",
+        "resource": "issue",
+        "operation": "create",
+        "project": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.internal_project_id }}",
+          "mode": "id"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "={{ $json.issue_type_id }}",
+          "mode": "id"
+        },
+        "summary": "={{ $json.summary }}",
+        "additionalFields": {
+          "description": "={{ $json.description }}",
+          "labels": "={{ $json.labels }}",
+          "priority": {
+            "__rl": true,
+            "value": "={{ $json.priority_id }}",
+            "mode": "id"
+          }
+        }
+      },
+      "id": "686a8d86-33a0-4bf7-978a-1c589a61087b",
+      "name": "Create internal ticket",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        300
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira interno"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloud",
+        "resource": "issueComment",
+        "operation": "add",
+        "issueKey": "={{ $('Build internal ticket').item.json.client_key }}",
+        "comment": "=Recibimos el incidente. Lo estamos siguiendo en nuestro ticket {{ $json.key }} con prioridad {{ $('Build internal ticket').item.json.priority }}.{{ $('Build internal ticket').item.json.missing_info.length ? '\\n\\nPara avanzar necesitamos:\\n- ' + $('Build internal ticket').item.json.missing_info.join('\\n- ') : '' }}",
+        "options": {}
+      },
+      "id": "c26f5198-86fc-4820-a2c8-eb33e0343970",
+      "name": "Reply on client ticket",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2300,
+        300
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira cliente"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.slack_channel }}",
+          "mode": "name"
+        },
+        "text": "={{ ['Highest','High'].includes($('Build internal ticket').item.json.priority) ? ':rotating_light:' : ':inbox_tray:' }} *{{ $('Create internal ticket').item.json.key }}* · {{ $('Build internal ticket').item.json.summary }}\n*Prioridad:* {{ $('Build internal ticket').item.json.priority }} · *Componente:* {{ $('Build internal ticket').item.json.component }} · *Tipo:* {{ $('Build internal ticket').item.json.issue_type }}\nOrigen: <{{ $('Build internal ticket').item.json.client_url }}|{{ $('Build internal ticket').item.json.client_key }}>",
+        "otherOptions": {}
+      },
+      "id": "678cd2c1-df2c-4968-b60c-3efc6337ded9",
+      "name": "Notify team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2520,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack account"
+        }
+      },
+      "webhookId": "f4ccb6ce-da13-4408-8b36-5b2274d0d9e0"
+    },
+    {
+      "parameters": {
+        "content": "## Jira (client) → Jira (internal) with AI\nEvery 10 minutes the workflow reads new tickets in the **client's Jira**, skips the ones already copied, and an LLM turns each one into a clean internal ticket: type, priority with a fixed rubric, component, context bullets and the info to request. Then it creates the ticket in **our Jira**, replies on the client ticket with our key and notifies Slack.\n\n**Edit `Config`** with project keys, issue type ids and priority ids of your Jira.",
+        "height": 280,
+        "width": 640
+      },
+      "id": "7ad494ec-12bf-4e9f-b920-ef0a95341e64",
+      "name": "Note 775ab6",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Idempotent\nEach internal ticket carries the label `ext-<CLIENT-KEY>`. One JQL query per run finds which client tickets already have a copy, so overlapping runs or retries never create duplicates.",
+        "height": 170,
+        "width": 400,
+        "color": 4
+      },
+      "id": "1a985cd3-5048-499c-be98-f5b3e16d72ed",
+      "name": "Note 5e1061",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        640,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Resilience\nIf the model fails twice the ticket is still created as High with the original text, so nothing is lost.",
+        "height": 130,
+        "width": 340,
+        "color": 3
+      },
+      "id": "fe3db808-917c-4336-82ae-8ff2c0db7f8e",
+      "name": "Note 80a95e",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        700
+      ]
+    }
+  ],
+  "connections": {
+    "Every 10 minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Search client Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search client Jira": {
+      "main": [
+        [
+          {
+            "node": "Collect client keys",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect client keys": {
+      "main": [
+        [
+          {
+            "node": "Find already synced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find already synced": {
+      "main": [
+        [
+          {
+            "node": "Keep new tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep new tickets": {
+      "main": [
+        [
+          {
+            "node": "AI analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI analysis": {
+      "main": [
+        [
+          {
+            "node": "Build internal ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback analysis": {
+      "main": [
+        [
+          {
+            "node": "Build internal ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI analysis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ticket schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI analysis",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build internal ticket": {
+      "main": [
+        [
+          {
+            "node": "Create internal ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create internal ticket": {
+      "main": [
+        [
+          {
+            "node": "Reply on client ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply on client ticket": {
+      "main": [
+        [
+          {
+            "node": "Notify team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

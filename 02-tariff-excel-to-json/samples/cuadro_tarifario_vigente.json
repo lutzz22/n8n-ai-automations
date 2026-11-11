@@ -1,0 +1,64 @@
+{
+  "distributor": "VoltaSur Energía",
+  "resolution": "ER 98/2026",
+  "valid_from": "2026-10-01",
+  "currency": "ARS",
+  "units": {
+    "fixed_charge": "ARS/mes",
+    "variable_charge": "ARS/kWh"
+  },
+  "tariffs": {
+    "T1-R1": {
+      "fixed_charge": {
+        "N1": 1215.4,
+        "N2": 1215.4,
+        "N3": 1215.4
+      },
+      "variable_charge": {
+        "N1": 98.512,
+        "N2": 61.334,
+        "N3": 55.02
+      }
+    },
+    "T1-R2": {
+      "fixed_charge": {
+        "N1": 1830.75,
+        "N2": 1830.75,
+        "N3": 1830.75
+      },
+      "variable_charge": {
+        "N1": 101.207,
+        "N2": 63.118,
+        "N3": 56.441
+      }
+    },
+    "T1-R3": {
+      "fixed_charge": {
+        "N1": 4410.1,
+        "N2": 4410.1,
+        "N3": 4410.1
+      },
+      "variable_charge": {
+        "N1": 107.889,
+        "N2": 70.502,
+        "N3": 62.996
+      }
+    },
+    "T1-G1": {
+      "fixed_charge": {
+        "N1": 3120.0
+      },
+      "variable_charge": {
+        "N1": 118.73
+      }
+    },
+    "T1-G2": {
+      "fixed_charge": {
+        "N1": 9875.55
+      },
+      "variable_charge": {
+        "N1": 121.045
+      }
+    }
+  }
+}

@@ -1,0 +1,443 @@
+{
+  "name": "Tariff table Excel → JSON with AI mapping",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Actualizar cuadro tarifario",
+        "formDescription": "Subí el Excel publicado por el ente regulador y el JSON vigente. El workflow genera el JSON nuevo y un reporte de variaciones.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "excel",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".xlsx,.xls",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "json_vigente",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".json",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "resolucion",
+              "placeholder": "ER 123/2026",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "vigencia",
+              "fieldType": "date",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ef3b3314-d77a-41ea-89e2-3ca239fd54fe",
+      "name": "Upload files",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "de58aa7e-ed58-4a83-bc41-6f6192cc422a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the current production JSON (kept as the template for the new one)\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'json_vigente');\nconst current = JSON.parse(buf.toString('utf8'));\nreturn [{ json: { current }, binary: $input.first().binary }];"
+      },
+      "id": "9cb4cfaa-f3a3-4ecd-a5be-c9bd94d4736b",
+      "name": "Read current JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "excel",
+        "options": {
+          "range": "A4:Z200",
+          "headerRow": true
+        }
+      },
+      "id": "abf4f9ab-72a4-42fc-9065-21c203735875",
+      "name": "Read Excel",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize the regulator's table: fill down merged cells, keep numeric rows, list headers and target keys\nconst rows = [];\nlet lastTariff = null;\nconst valueHeaders = new Set();\n$input.all().forEach((item, idx) => {\n  const r = item.json;\n  const tariff = (r['Tarifa'] ?? '').toString().trim() || lastTariff;\n  lastTariff = tariff;\n  const values = {};\n  for (const [k, v] of Object.entries(r)) {\n    if (['Tarifa', 'Concepto', 'Unidad'].includes(k)) continue;\n    if (v === '' || v === null || v === undefined) continue;\n    const num = typeof v === 'number' ? v : Number(String(v).replace(/\\./g, '').replace(',', '.'));\n    if (Number.isFinite(num)) { values[k] = num; valueHeaders.add(k); }\n  }\n  if (r['Concepto'] && Object.keys(values).length) {\n    rows.push({ row_id: rows.length + 1, tariff_label: tariff, concept: r['Concepto'], unit: r['Unidad'] ?? '', values });\n  }\n});\n\nconst current = $('Read current JSON').first().json.current;\nconst targets = Object.entries(current.tariffs).map(([key, charges]) => ({\n  tariff_key: key,\n  fields: Object.fromEntries(Object.entries(charges).map(([f, lv]) => [f, Object.keys(lv)])),\n}));\n\nreturn [{ json: {\n  rows,\n  value_headers: [...valueHeaders],\n  targets,\n  prompt_rows: rows.map(r => `${r.row_id}. ${r.tariff_label} | ${r.concept} | ${r.unit}`).join('\\n'),\n} }];"
+      },
+      "id": "20d0f08a-ccae-4553-abb0-46a801f8607f",
+      "name": "Normalize table",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=TARGET KEYS (from the current JSON):\n{{ JSON.stringify($json.targets, null, 2) }}\n\nVALUE COLUMN HEADERS:\n{{ $json.value_headers.map(h => '- ' + h).join('\\n') }}\n\nEXCEL ROWS (row_id. tariff | concept | unit):\n{{ $json.prompt_rows }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You map rows and columns of an electricity tariff table published by a regulator to the keys of an existing JSON configuration.\nYou only decide WHERE each value goes; you never read, copy or change numbers.\nRules:\n- Map every row to exactly one tariff_key and field from the targets. Use the tariff code in the label (e.g. \"T1 - R1 ...\" is T1-R1) and the concept (\"Cargo Fijo\" is fixed_charge, \"Cargo Variable\" is variable_charge).\n- Map every value column header to a level key (e.g. \"Nivel 1 ...\" is N1).\n- If a row or column has no clear target, return null instead of guessing."
+            }
+          ]
+        }
+      },
+      "id": "4c662c71-fae2-4baa-aa88-a61c20664115",
+      "name": "AI mapping",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        880,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "02eff6bf-e5da-4ca2-9aa2-83ab955dbb58",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        820,
+        540
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"row_mappings\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"row_id\": {\n            \"type\": \"integer\"\n          },\n          \"tariff_key\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"One of the target tariff keys, or null if the row does not belong to any\"\n          },\n          \"field\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"Target field name, e.g. fixed_charge or variable_charge\"\n          }\n        },\n        \"required\": [\n          \"row_id\",\n          \"tariff_key\",\n          \"field\"\n        ]\n      }\n    },\n    \"column_mappings\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"header\": {\n            \"type\": \"string\"\n          },\n          \"level_key\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"Target level key, e.g. N1\"\n          }\n        },\n        \"required\": [\n          \"header\",\n          \"level_key\"\n        ]\n      }\n    }\n  },\n  \"required\": [\n    \"row_mappings\",\n    \"column_mappings\"\n  ]\n}"
+      },
+      "id": "5b096c08-896c-44ce-adb9-896dbbe1e727",
+      "name": "Mapping schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1000,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apply the mapping with code: build the new JSON, compare against the current one, flag anomalies\nconst MAX_CHANGE_PCT = 40;  // variations above this need a human check\nconst { rows } = $('Normalize table').first().json;\nconst current = $('Read current JSON').first().json.current;\nconst form = $('Upload files').first().json;\nconst map = $input.first().json.output;\n\nconst next = JSON.parse(JSON.stringify(current));\nnext.resolution = form.resolucion;\nnext.valid_from = form.vigencia;\n\nconst levelOf = Object.fromEntries(map.column_mappings.map(c => [c.header, c.level_key]));\nconst rowMap = Object.fromEntries(map.row_mappings.map(r => [r.row_id, r]));\nconst issues = [];\nconst changes = [];\nconst updated = new Set();\n\nfor (const row of rows) {\n  const m = rowMap[row.row_id];\n  if (!m?.tariff_key || !m?.field || !next.tariffs[m.tariff_key]?.[m.field]) {\n    issues.push(`Fila sin destino: \"${row.tariff_label} | ${row.concept}\"`);\n    continue;\n  }\n  for (const [header, value] of Object.entries(row.values)) {\n    const level = levelOf[header];\n    if (!level || !(level in next.tariffs[m.tariff_key][m.field])) continue;\n    const path = `${m.tariff_key}.${m.field}.${level}`;\n    const old = current.tariffs[m.tariff_key][m.field][level];\n    const pct = old ? ((value - old) / old) * 100 : null;\n    next.tariffs[m.tariff_key][m.field][level] = value;\n    updated.add(path);\n    changes.push({ path, old, new: value, change_pct: pct === null ? null : Math.round(pct * 100) / 100 });\n    if (value <= 0) issues.push(`${path}: valor no positivo (${value})`);\n    if (pct !== null && Math.abs(pct) > MAX_CHANGE_PCT) issues.push(`${path}: variación de ${pct.toFixed(1)}% (${old} → ${value})`);\n  }\n}\n\n// Every key of the current config must receive a new value\nfor (const [t, charges] of Object.entries(current.tariffs))\n  for (const [f, levels] of Object.entries(charges))\n    for (const l of Object.keys(levels))\n      if (!updated.has(`${t}.${f}.${l}`)) issues.push(`${t}.${f}.${l}: no se encontró en el Excel (quedó el valor anterior)`);\n\nconst avg = changes.length ? changes.reduce((s, c) => s + (c.change_pct ?? 0), 0) / changes.length : 0;\nconst fileName = `cuadro_tarifario_${String(form.resolucion).replace(/\\W+/g, '_')}.json`;\nconst table = changes.map(c => `<tr><td>${c.path}</td><td>${c.old}</td><td>${c.new}</td><td>${c.change_pct}%</td></tr>`).join('');\nconst report_html = `<h3>${issues.length ? '⚠️ Revisar antes de publicar' : '✅ Listo para publicar'}</h3>\n<p>${changes.length} valores actualizados · variación promedio ${avg.toFixed(2)}%</p>\n${issues.length ? '<ul>' + issues.map(i => `<li>${i}</li>`).join('') + '</ul>' : ''}\n<table border=\"1\" cellpadding=\"4\"><tr><th>Clave</th><th>Anterior</th><th>Nuevo</th><th>Var.</th></tr>${table}</table>`;\n\nreturn [{ json: { ok: issues.length === 0, issues, changes, avg_change_pct: Math.round(avg * 100) / 100, file_name: fileName, report_html, new_config: next } }];"
+      },
+      "id": "cbd62925-1e00-44bf-ab43-95f808832ab0",
+      "name": "Build JSON and diff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4b571e6f-beff-44e6-9832-07f4594f48f7",
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "137751b3-ec4c-46e3-a3aa-acc4d473beb7",
+      "name": "Ready to publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify($json.new_config) }}",
+        "options": {}
+      },
+      "id": "d389aabd-e116-4b42-8e04-5fb010ac677e",
+      "name": "Keep config only",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1640,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": {
+          "fileName": "={{ $('Build JSON and diff').item.json.file_name }}",
+          "format": true
+        }
+      },
+      "id": "cfd4f461-a2b9-4e30-a88a-73785151e061",
+      "name": "To JSON file",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "returnBinary",
+        "completionTitle": "Cuadro tarifario generado",
+        "completionMessage": "Sin alertas: el JSON nuevo se descargó.",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "6de056ea-89ad-4a5a-8e12-c9e8cc56a07a",
+      "name": "Download new JSON",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        2080,
+        200
+      ],
+      "webhookId": "f23640de-19d8-4802-aeef-9db8ce5f37bf"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{ $json.report_html }}",
+        "options": {}
+      },
+      "id": "bb8fea68-a68e-4715-b75d-530b5438becb",
+      "name": "Show review report",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        1640,
+        420
+      ],
+      "webhookId": "4f3bca4b-58a0-4017-bb89-b9aaca5d53eb"
+    },
+    {
+      "parameters": {
+        "content": "## Tariff table: regulator Excel → production JSON\nThe regulator publishes the new tariff table in Excel; the platform needs it as JSON. The **LLM only decides where each row and column goes** (labels change between publications); the values are copied by code, compared against the current JSON and checked before anyone publishes them.",
+        "height": 230,
+        "width": 620
+      },
+      "id": "6435a73e-65b9-4a0b-bc27-8ef1b6c4be24",
+      "name": "Note 6b5e9b",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Guardrails\n- every key of the current JSON must get a value\n- no value ≤ 0\n- variations above 40% stop the flow and show a report for human review",
+        "height": 160,
+        "width": 360,
+        "color": 4
+      },
+      "id": "97e799f8-f190-454a-bc40-6c35483bed84",
+      "name": "Note 558b48",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Upload files": {
+      "main": [
+        [
+          {
+            "node": "Read current JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read current JSON": {
+      "main": [
+        [
+          {
+            "node": "Read Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Excel": {
+      "main": [
+        [
+          {
+            "node": "Normalize table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize table": {
+      "main": [
+        [
+          {
+            "node": "AI mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI mapping",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mapping schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI mapping",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI mapping": {
+      "main": [
+        [
+          {
+            "node": "Build JSON and diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build JSON and diff": {
+      "main": [
+        [
+          {
+            "node": "Ready to publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready to publish?": {
+      "main": [
+        [
+          {
+            "node": "Keep config only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show review report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep config only": {
+      "main": [
+        [
+          {
+            "node": "To JSON file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To JSON file": {
+      "main": [
+        [
+          {
+            "node": "Download new JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
